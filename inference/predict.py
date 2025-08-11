@@ -1,29 +1,37 @@
 # inference/predict.py
 import os, tempfile
+import numpy as np
 from PIL import Image
-from utils.s3 import download_s3_to_path  # 이미 있다면 그대로 사용
+from utils.s3 import download_s3_to_path
 
-# 👉 실제 추론은 "로컬 경로"만 받도록 묶기
-def _infer_on_path(local_path: str) -> dict:
-    # TODO: 여기에 기존 추론 로직 사용
-    # ex) img = Image.open(local_path); model.predict(img) ...
-    # 임시 더미 반환 형태(프론트/백 연동용 스키마 유지)
-    with Image.open(local_path) as im:
-        im.load()
-    return {"model": "heuristic", "label": "headlight_on", "prob": 0.98}
+MODE = os.getenv("LAMP_MODE", "dummy")  # dummy | brightness
 
-# 👉 외부에 노출되는 API: s3도, 로컬도 모두 지원
 def run_inference(src: str) -> dict:
-    # src가 s3://면 다운로드 후 로컬 경로로 추론
+    # s3/로컬 분기 그대로 유지
     if src.startswith("s3://"):
         suffix = os.path.splitext(src)[1] or ".jpg"
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-        tmp.close()
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix); tmp.close()
         download_s3_to_path(src, tmp.name)
         try:
             return _infer_on_path(tmp.name)
         finally:
             os.unlink(tmp.name)
     else:
-        # 로컬 파일 경로 그대로 처리 (업로드 엔드포인트가 여기로 옴)
         return _infer_on_path(src)
+
+def _infer_on_path(local_path: str) -> dict:
+    if MODE == "dummy":
+        # 완전 고정 더미
+        return {"model": "dummy_v1", "label": "headlight_on", "prob": 0.98}
+
+    if MODE == "brightness":
+        # 간단한 밝기 휴리스틱(밝으면 on, 어두우면 off)
+        im = Image.open(local_path).convert("L")
+        mean = float(np.array(im).mean()) / 255.0
+        label = "headlight_on" if mean > 0.5 else "headlight_off"
+        # 확률은 밝기와 임계값(0.5) 거리로 가볍게 계산
+        prob = max(0.5, min(0.99, 0.5 + abs(mean - 0.5)))
+        return {"model": "brightness_v0", "label": label, "prob": prob}
+
+    # 기본 fallback
+    return {"model": "dummy_v1", "label": "headlight_on", "prob": 0.98}
