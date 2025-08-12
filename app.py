@@ -1,87 +1,165 @@
-
-import json
-from fastapi import FastAPI, UploadFile, File, Form
+import asyncio
+from fastapi import FastAPI
 from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime
+import json
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
-from lamp_kafka.producer import VehicleAuditProducer
-
-# Kafka Producer 초기화
-# 이 코드는 앱 실행 시 단 한 번만 실행되어 카프카 서버와 연결을 맺습니다.
-# 실제 운영 환경에서는 카프카 서버 주소를 설정 파일이나 환경 변수에서 가져오는 것이 좋습니다.
-producer = VehicleAuditProducer(topic='ai-diagnosis-completed', bootstrap_servers='localhost:9092')
-
-app = FastAPI()
-
-
-class S3InferenceRequest(BaseModel):
-    s3_uri: str
+# --- DTO 정의 (이전과 동일) ---
+class TestStartedEventDTO(BaseModel):
+    traceId: Optional[str] = None
     auditId: int
     inspectionId: int
     inspectionType: str
+    model: Optional[str] = None
+    lineCode: Optional[str] = None
+    collectDataPath: str
+    requestedAt: Optional[str] = None
 
+class WorkerTaskCompletedEventDTO(BaseModel):
+    traceId: str
+    auditId: int
+    inspectionId: int
+    inspectionType: str
+    workerId: str
+    workerName: str
+    resolve: str
+    startedAt: str
+    endedAt: str
+    durationSec: Optional[int] = None
 
-@app.post("/inference/lamp")
-def inference_s3(request: S3InferenceRequest):
-    """
-    S3 URI를 받아 추론을 수행하고, 결과를 카프카로 전송합니다.
-    """
-    # 1. 실제 모델 추론 로직 (현재는 더미 데이터 사용)
-    # TODO: 전달받은 s3_uri를 사용하여 이미지를 다운로드하고 모델 추론을 수행해야 합니다.
-    inference_result = {
-        "model": "lamp_v1_s3",
-        "label": "headlight_on",
-        "prob": 0.98
+class DiagnosisResult(BaseModel):
+    traceId: str
+    auditId: int
+    inspectionId: int
+    inspectionType: str
+    status: str  # COMPLETED | FAILED
+    model: str
+    result: dict
+    message: str
+    completedAt: str
+
+# --- Kafka 설정 ---
+KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
+TEST_STARTED_TOPIC = "test-started"
+WORKER_COMPLETED_TOPIC = "worker-task-completed"
+DIAGNOSIS_RESULT_TOPIC = "ai-diagnosis-completed"
+
+app = FastAPI()
+producer = None
+
+# --- Kafka 프로듀서/컨슈머 생명주기 관리 ---
+@app.on_event("startup")
+async def startup_event():
+    global producer
+    producer = AIOKafkaProducer(bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+                                value_serializer=lambda v: json.dumps(v).encode('utf-8'))
+    await producer.start()
+    asyncio.create_task(consume_test_started())
+    asyncio.create_task(consume_worker_completed())
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await producer.stop()
+
+# --- 결과 전송 함수 (Kafka) ---
+async def send_diagnosis_result(result_dto: DiagnosisResult):
+    print(f"Sending DiagnosisResult to Kafka topic '{DIAGNOSIS_RESULT_TOPIC}': {result_dto.json()}")
+    await producer.send_and_wait(DIAGNOSIS_RESULT_TOPIC, result_dto.dict())
+
+# --- 모델 추론 시뮬레이션 및 결과 전송 ---
+async def simulate_inference_and_send_result(evt: TestStartedEventDTO):
+    print(f"Simulating inference for inspectionId: {evt.inspectionId}")
+    await asyncio.sleep(3)  # 3초간 추론 시뮬레이션
+
+    # AI 추론 결과 시뮬레이션
+    if not evt.collectDataPath or "invalid" in evt.collectDataPath:
+        is_defect = True
+        result_label = "N/A"
+        result_score = 0.0
+        model_used = "torch:heuristic"
+        message = "Invalid collectDataPath or file access failed."
+    else:
+        is_defect = True
+        result_label = "headlight_on"
+        result_score = 0.982
+        model_used = "torch:best.pt"
+        message = "ok"
+
+    # vehicleAudit의 DTO 형식에 맞춘 결과 데이터 (String으로 변환)
+    diagnosis_result_content = {
+        "label": result_label,
+        "score": result_score,
+        "model": model_used,
+        "message": message,
+        "extra": {"brightness": 187.4}
     }
 
-    # 2. vehicleAudit의 DTO 형식에 맞는 카프카 메시지 생성
-    kafka_message = {
-        "auditId": request.auditId,
-        "inspectionId": request.inspectionId,
-        "inspectionType": request.inspectionType,
-        "isDefect": inference_result.get("label") != "headlight_on",  # '정상'이 아니면 결함으로 판단
-        "collectDataPath": request.s3_uri,  # 원본 데이터 경로
-        "resultDataPath": None,  # 결과 데이터 경로 (필요시 생성)
-        "diagnosisResult": json.dumps(inference_result)  # AI의 상세 결과는 JSON 문자열로 저장
+    # Kafka로 전송할 최종 페이로드 (AiDiagnosisCompletedEventDTO 와 일치)
+    payload = {
+        "auditId": evt.auditId,
+        "inspectionId": evt.inspectionId,
+        "inspectionType": evt.inspectionType,
+        "isDefect": is_defect,
+        "collectDataPath": evt.collectDataPath,
+        "resultDataPath": f"s3://aivle-5/results/{evt.inspectionId}/result.jpg",
+        "diagnosisResult": json.dumps(diagnosis_result_content)
     }
 
-    # 3. 카프카로 메시지 발행 전, 콘솔에 출력하여 확인
-    print("Sending message to Kafka:", kafka_message)
-    # producer.send_message(kafka_message)
+    # Spring Kafka Deserializer가 타입을 인식할 수 있도록 __TypeId__ 헤더 추가
+    headers = [
+        ('__TypeId__', b'aivle.project.vehicleAudit.event.AiDiagnosisCompletedEventDTO')
+    ]
 
-    return {"message": "Inference completed. Kafka is disabled.", "kafka_message": kafka_message}
+    print(f"Sending data to Kafka topic '{DIAGNOSIS_RESULT_TOPIC}': {json.dumps(payload)}")
+    # producer.send_and_wait() 호출 시 value와 headers를 명시적으로 전달
+    await producer.send_and_wait(DIAGNOSIS_RESULT_TOPIC, value=payload, headers=headers)
 
 
-@app.post("/inference/lamp/upload")
-def inference_upload(
-        image_file: UploadFile = File(...),
-        auditId: int = Form(...),
-        inspectionId: int = Form(...),
-        inspectionType: str = Form(...)
-):
-    """
-    이미지 파일을 직접 업로드받아 추론을 수행하고, 결과를 카프카로 전송합니다.
-    """
-    # 1. 실제 모델 추론 로직 (현재는 더미 데이터 사용)
-    # TODO: 전달받은 image_file.file 객체를 사용하여 모델 추론을 수행해야 합니다.
-    inference_result = {
-        "model": "lamp_v1_upload",
-        "label": "headlight_off",
-        "prob": 0.95
-    }
+# --- Kafka 컨슈머 ---
+async def consume_test_started():
+    consumer = AIOKafkaConsumer(
+        TEST_STARTED_TOPIC,
+        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+        group_id="lamp-ai-group",
+        value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+        auto_offset_reset='earliest'
+    )
+    await consumer.start()
+    try:
+        async for msg in consumer:
+            print(f"Consumed from {msg.topic}: {msg.value}")
+            try:
+                evt = TestStartedEventDTO(**msg.value)
+                asyncio.create_task(simulate_inference_and_send_result(evt))
+            except Exception as e:
+                print(f"Error processing message from {TEST_STARTED_TOPIC}: {e}")
+    finally:
+        await consumer.stop()
 
-    # 2. vehicleAudit의 DTO 형식에 맞는 카프카 메시지 생성
-    kafka_message = {
-        "auditId": auditId,
-        "inspectionId": inspectionId,
-        "inspectionType": inspectionType,
-        "isDefect": inference_result.get("label") != "headlight_on",
-        "collectDataPath": image_file.filename,  # 원본 데이터 경로로 파일명 사용
-        "resultDataPath": None,
-        "diagnosisResult": json.dumps(inference_result)
-    }
+async def consume_worker_completed():
+    consumer = AIOKafkaConsumer(
+        WORKER_COMPLETED_TOPIC,
+        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+        group_id="lamp-ai-group",
+        value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+        auto_offset_reset='earliest'
+    )
+    await consumer.start()
+    try:
+        async for msg in consumer:
+            print(f"Consumed from {msg.topic}: {msg.value}")
+            try:
+                evt = WorkerTaskCompletedEventDTO(**msg.value)
+                # 메타데이터 병합 저장 또는 로그 기록
+                print(f"Worker {evt.workerName} completed task for inspection {evt.inspectionId}. Resolve: {evt.resolve}")
+            except Exception as e:
+                print(f"Error processing message from {WORKER_COMPLETED_TOPIC}: {e}")
+    finally:
+        await consumer.stop()
 
-    # 3. 카프카로 메시지 발행 전, 콘솔에 출력하여 확인
-    print("Sending message to Kafka:", kafka_message)
-    producer.send_ai_diagnosis_completed(kafka_message)
-    return {"message": "Request processed successfully."}
-    #return {"message": "Inference completed. Kafka is disabled.", "kafka_message": kafka_message}
+# --- (선택) 상태 확인용 엔드포인트 ---
+@app.get("/")
+def read_root():
+    return {"status": "lamp_ai_patched is running with Kafka consumers"}
