@@ -71,21 +71,41 @@ async def run_inference_and_send_result(evt: TestStartedEventDTO):
         image = Image.open(io.BytesIO(response.content)).convert("RGB")
 
         results = model(image)
-        
-        # 모델이 아무것도 감지하지 못한 경우에 대한 안정성 강화
-        if results[0].probs is None:
+        names = model.names
+
+        # BUG FIX: Detection 모델의 결과를 올바르게 해석
+        # 탐지된 객체의 개수(len(results[0].boxes))를 확인 (기존의 results[0].probs는 Classification 모델용)
+        if len(results[0].boxes) == 0:
             print(f"Warning: Model returned no detections for inspectionId {evt.inspectionId}.")
-            is_defect = True  # 판단 불가 -> 비정상으로 간주하여 사람의 확인을 유도
+            is_defect = True  # 판단 불가 -> 비정상으로 간주
             result_label = "undetermined"
             result_score = 0.0
-            message = "Model could not make a confident prediction."
+            message = "Model could not detect any lamp object."
         else:
-            # 정상적으로 결과가 나온 경우
-            names = model.names
-            probs = results[0].probs
-            result_label = names[probs.top1]
-            result_score = probs.top1conf.item()
-            is_defect = ('off' in result_label.lower())
+            # 하나라도 'off' 상태인 램프가 감지되면 결함으로 판단
+            is_defect = False
+            highest_off_score = 0
+            final_label = ""
+
+            for box in results[0].boxes:
+                label = names[int(box.cls)]
+                score = float(box.conf)
+                if 'off' in label.lower():
+                    is_defect = True
+                    # 가장 확신도 높은 'off' 결과를 최종 결과로 선택
+                    if score > highest_off_score:
+                        highest_off_score = score
+                        final_label = label
+            
+            # 결함('off')이 발견되지 않았다면, 가장 확신도 높은 'on' 결과를 선택
+            if not is_defect:
+                best_box = results[0].boxes[0] # 가장 확신도 높은 객체가 맨 앞에 옴
+                result_label = names[int(best_box.cls)]
+                result_score = float(best_box.conf)
+            else:
+                result_label = final_label
+                result_score = highest_off_score
+            
             message = "ok"
 
         model_used = "yolo:models/best.pt"
