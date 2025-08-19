@@ -28,11 +28,11 @@ services:
     ports:
       - "29092:29092"   # 호스트에서 접근할 때 (예: 로컬 테스트 클라이언트)
 
-  lamp_ai:
+  light_ai:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: lamp_ai
+    container_name: light_ai
     depends_on:
       - kafka
     env_file:
