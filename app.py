@@ -146,7 +146,7 @@ async def consume_test_started():
     consumer = AIOKafkaConsumer(
         TEST_STARTED_TOPIC,
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-        group_id=os.getenv("KAFKA_GROUP_ID", "light-ai-group"),
+        group_id=os.getenv("KAFKA_GROUP_ID", "lamp-ai-group"),
         value_deserializer=lambda m: json.loads(m.decode('utf-8')),
         auto_offset_reset='earliest'
     )
@@ -165,4 +165,4 @@ async def consume_test_started():
 # --- 상태 확인용 엔드포인트 ---
 @app.get("/")
 def read_root():
-    return {"status": "light_ai is running with a real YOLO model"}
+    return {"status": "lamp_ai is running with a real YOLO model"}
