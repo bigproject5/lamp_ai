@@ -13,3 +13,5 @@ kafka-python
 boto3==1.34.69
 botocore==1.34.69
 s3transfer==0.10.1
+
+aiokafka==0.10.0

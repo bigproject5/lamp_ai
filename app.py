@@ -1,6 +1,7 @@
 import asyncio
 import json
 import io
+import os
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import Optional
@@ -23,9 +24,9 @@ class TestStartedEventDTO(BaseModel):
     requestedAt: Optional[str] = None
 
 # --- Kafka 설정 ---
-KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
-TEST_STARTED_TOPIC = "test-started"
-DIAGNOSIS_RESULT_TOPIC = "ai-diagnosis-completed"
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+TEST_STARTED_TOPIC = os.getenv("KAFKA_SOURCE_TOPIC", "test-started")
+DIAGNOSIS_RESULT_TOPIC = os.getenv("KAFKA_RESULT_TOPIC", "ai-diagnosis-completed")
 
 app = FastAPI()
 producer = None
@@ -131,8 +132,8 @@ async def run_inference_and_send_result(evt: TestStartedEventDTO):
         "inspectionType": evt.inspectionType,
         "isDefect": is_defect,
         "collectDataPath": evt.collectDataPath,
-        "resultDataPath": f"s3://aivle-5/results/{evt.inspectionId}/result.jpg",
-        "diagnosisResult": json.dumps(diagnosis_result_content)
+        "resultDataPath": f"s3://{os.getenv('S3_BUCKET', 'aivle-5')}/results/{evt.inspectionId}/result.jpg",
+        "diagnosisResult": diagnosis_result_content
     }
     
     headers = [('__TypeId__', b'aivle.project.vehicleAudit.event.AiDiagnosisCompletedEventDTO')]
@@ -145,7 +146,7 @@ async def consume_test_started():
     consumer = AIOKafkaConsumer(
         TEST_STARTED_TOPIC,
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-        group_id="lamp-ai-group",
+        group_id=os.getenv("KAFKA_GROUP_ID", "lamp-ai-group"),
         value_deserializer=lambda m: json.loads(m.decode('utf-8')),
         auto_offset_reset='earliest'
     )
