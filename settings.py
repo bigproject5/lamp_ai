@@ -7,7 +7,7 @@ def getenv(key, default=None):
     """
     return os.getenv(key, default)
 
-KAFKA_BOOTSTRAP_SERVERS = getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:29092")
+KAFKA_BOOTSTRAP_SERVERS = getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 
 # For this line, we want to check KAFKA_SOURCE_TOPIC first, then default to "test-started"
 KAFKA_SOURCE_TOPIC = getenv("KAFKA_SOURCE_TOPIC", "test-started")

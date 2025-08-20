@@ -126,6 +126,25 @@ async def run_inference_and_send_result(evt: TestStartedEventDTO):
         "message": message,
     }
 
+    # [DB 제약조건 해결] diagnosisResult를 DB 컬럼(VARCHAR(255))에 맞게 줄입니다.
+    # diagnosis_result_content가 JSON 문자열로 변환될 때 255자를 넘지 않도록 보장합니다.
+    DB_COLUMN_MAX_SIZE = 255
+
+    # 'message' 필드를 제외한 나머지 JSON 구조의 길이를 계산합니다.
+    temp_content = diagnosis_result_content.copy()
+    temp_content["message"] = ""
+    # 한글 등 non-ASCII 문자 길이를 정확히 계산하기 위해 ensure_ascii=False 사용
+    overhead_length = len(json.dumps(temp_content, ensure_ascii=False))
+
+    # 'message' 필드에 할당 가능한 최대 길이를 계산합니다. (말줄임표 "..." 3자리 확보)
+    max_message_length = DB_COLUMN_MAX_SIZE - overhead_length - 3
+
+    # 'message'가 최대 길이를 초과하면 자르고 말줄임표를 추가합니다.
+    original_message = diagnosis_result_content.get("message", "")
+    if len(original_message) > max_message_length and max_message_length > 0:
+        diagnosis_result_content["message"] = original_message[:max_message_length] + "..."
+
+
     payload = {
         "auditId": evt.auditId,
         "inspectionId": evt.inspectionId,

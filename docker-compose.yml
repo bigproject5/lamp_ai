@@ -16,17 +16,16 @@ services:
       # Zookeeper 연결
       - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
 
-      # 리스너: 내부(INTERNAL, 컨테이너 간) / 외부(EXTERNAL, 호스트)
-      - KAFKA_CFG_LISTENERS=INTERNAL://:9092,EXTERNAL://:29092
-      - KAFKA_CFG_ADVERTISED_LISTENERS=INTERNAL://kafka:9092,EXTERNAL://localhost:29092
-      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
-      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=INTERNAL
+      # 단일 리스너로 29092 포트만 사용
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:29092
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://localhost:29092
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT
 
       # 편의 옵션
       - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
       - ALLOW_PLAINTEXT_LISTENER=yes
     ports:
-      - "29092:29092"   # 호스트에서 접근할 때 (예: 로컬 테스트 클라이언트)
+      - "29092:29092"   # 호스트에서 접근할 때
 
   lamp_ai:
     build:
@@ -39,8 +38,8 @@ services:
       - .env
     ports:
       - "8000:8000"
-    # 개발 중 코드 핫리로드가 필요하면 주석 해제:
-    # volumes:
-    #   - .:/app
+    environment:
+      # lamp_ai에서 kafka에 연결할 때는 컨테이너명:포트 사용
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
     command: >
       sh -c "python app.py"
