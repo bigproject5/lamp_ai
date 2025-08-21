@@ -24,7 +24,9 @@ class TestStartedEventDTO(BaseModel):
     requestedAt: Optional[str] = None
 
 # --- Kafka 설정 ---
-KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+# 로컬에서 uvicorn으로 실행 시 환경변수가 없으면 localhost:9092를 사용합니다.
+# Docker로 실행 시 docker-compose.yml의 환경변수(kafka:9092)가 이 값을 덮어씁니다.
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 TEST_STARTED_TOPIC = os.getenv("KAFKA_SOURCE_TOPIC", "test-started")
 DIAGNOSIS_RESULT_TOPIC = os.getenv("KAFKA_RESULT_TOPIC", "ai-diagnosis-completed")
 
