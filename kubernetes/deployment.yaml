@@ -12,11 +12,18 @@ spec:
       labels:
         app: lamp-ai
     spec:
+      nodeSelector:
+        workload-type: python
+      tolerations:
+        - key: "dedicated"
+          operator: "Equal"
+          value: "python-apps"
+          effect: "NoSchedule"
       containers:
         - name: lamp-ai
-          image: 956463122808.dkr.ecr.ap-northeast-2.amazonaws.com/lamp-ai:v1
+          image: 956463122808.dkr.ecr.ap-northeast-2.amazonaws.com/lamp-ai:v2
           ports:
-            - containerPort: 8080
+            - containerPort: 8000
           env:
             - name: KAFKA_BOOTSTRAP_SERVERS
               valueFrom:
